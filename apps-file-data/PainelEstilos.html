@@ -1,0 +1,129 @@
+<!--
+  PainelEstilos.html
+  ---------------------------------------------------------------------------
+  CSS específico do Painel (o que não é compartilhado com a Barra Lateral —
+  ver EstilosComuns.html para cores/fonte/formato básico de cartão).
+  ---------------------------------------------------------------------------
+-->
+<style>
+  .app-bar { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; padding: 14px 20px; position: relative; }
+  .app-bar h1 { font-size: 16px; font-weight: 700; margin: 0; }
+  .app-bar p { font-size: 11px; margin: 2px 0 0 0; opacity: 0.85; }
+  .content { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* Indicador de "calculando" — liga/desliga via classe no <body> (ver
+     PainelScript.html::dispararAtualizar_). Uma chamada ao servidor sempre leva
+     alguns segundos (é o Apps Script recalculando), então isso existe só pra deixar
+     claro que o Painel está trabalhando, não travado. */
+  .app-bar::after {
+    content: ''; position: absolute; right: 20px; top: 50%; margin-top: -7px;
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  body.carregando .app-bar::after { opacity: 1; animation: girar-carregando 0.8s linear infinite; }
+  @keyframes girar-carregando { to { transform: rotate(360deg); } }
+
+  /* As duas "telas" do Painel (Avaliações / Participação) — mesma ideia visual das
+     .tabs internas (Distribuição/Dispersão), só maior, porque troca a tela inteira. */
+  .top-tabs { display: flex; gap: 2px; background: var(--primary-dark); padding: 0 20px; }
+  .top-tab-btn {
+    background: transparent; color: rgba(255,255,255,0.7); border: none;
+    border-bottom: 3px solid transparent; padding: 10px 16px; font-family: inherit;
+    font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .top-tab-btn.active { color: #fff; border-bottom-color: var(--accent-teal); }
+  .top-tab-btn:hover:not(.active) { color: #fff; }
+
+  .card h3 { font-size: 12px; font-weight: 700; color: var(--primary-dark); margin: 0 0 10px 0; }
+  .card .subtitle { font-size: 10.5px; color: var(--text-secondary); margin: -6px 0 10px 0; }
+
+  /* flex (não grid de colunas fixas) de propósito: o campo Setor (#fieldSetorFiltro)
+     some de vez (display:none, via a classe .oculto já usada no resto do Painel) quando
+     Tipo != Pessoa — ver trocarTipoItem(). Um grid de colunas fixas deixaria um buraco
+     vazio nesse caso (ou empurraria cada campo pra uma coluna com a largura ERRADA); com
+     flex, os campos restantes simplesmente se redistribuem no espaço que sobra. */
+  .builder-row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+  .builder-row .field { flex: 1 1 130px; }
+  .builder-row .field-item { flex: 1.4 1 160px; }
+  .field label { display: block; font-size: 10.5px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; }
+  .field select { width: 100%; padding: 7px 8px; border-radius: 6px; border: 1px solid var(--divider);
+    background: #FFFDE7; font-family: inherit; font-size: 12.5px; color: var(--text-primary); }
+  button.btn-add {
+    background: var(--primary); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 16px; font-family: inherit; font-weight: 500; font-size: 12.5px; cursor: pointer;
+    white-space: nowrap; height: 32px;
+  }
+  button.btn-add:hover { background: var(--primary-dark); }
+  button.btn-add:disabled { opacity: 0.5; cursor: default; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; min-height: 20px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--primary-light); color: var(--primary-dark);
+    border-radius: 20px; padding: 5px 6px 5px 12px; font-size: 12px; font-weight: 500;
+  }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .chip button { border: none; background: rgba(0,0,0,0.08); color: var(--primary-dark); border-radius: 50%;
+    width: 18px; height: 18px; line-height: 1; cursor: pointer; font-size: 12px; }
+  .chip button:hover { background: rgba(0,0,0,0.18); }
+  .chip-empty { font-size: 11.5px; color: var(--text-secondary); font-style: italic; }
+
+  .hint { font-size: 10.5px; color: var(--text-secondary); font-style: italic; margin-top: 10px; }
+  .warn-max { font-size: 11px; color: var(--warning); font-weight: 500; margin-top: 8px; display: none; }
+  .warn-max.on { display: block; }
+
+  .tabela-scroll { overflow-x: auto; } /* a tabela de Resumo ganhou colunas (nota ajustada/estabilizada, avaliações/avaliadores) e pode passar da largura do card */
+  table.resumo { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12px; }
+  table.resumo th { text-align: left; font-size: 10.5px; color: var(--text-secondary); font-weight: 500;
+    padding: 4px 8px; border-bottom: 2px solid var(--divider); white-space: nowrap; }
+  /* Cabeçalho das colunas numéricas alinhado à direita, igual às células (.num/.secundario)
+     embaixo dele — sem isso o título fica à esquerda enquanto o número fica à direita,
+     dando a impressão de que o número "avançou" da coluna certa. */
+  table.resumo th.num { text-align: right; }
+  table.resumo td { padding: 6px 8px; border-bottom: 1px solid var(--divider); }
+  table.resumo td.num { text-align: right; font-weight: 700; color: var(--primary-dark); }
+  table.resumo td.secundario { text-align: right; font-weight: 500; color: var(--text-secondary); font-size: 11px; }
+  table.resumo tr.baseline td { color: var(--text-secondary); font-style: italic; }
+  table.resumo .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  table.resumo .pequeno { font-style: italic; color: var(--text-secondary); font-size: 11px; }
+  /* linha pequena embaixo de um número (ex.: autoavaliação embaixo da nota) — mesma
+     célula, sem abrir coluna nova, pra tabela continuar escaneável mesmo com mais dado. */
+  table.resumo .mini { display: block; font-weight: 400; font-size: 9.5px; color: var(--text-secondary); margin-top: 1px; }
+
+  /* Sub-nível de abas (ex.: Por nota / Por avaliador, dentro de Distribuição) — mesmo
+     componente de .tabs, só visualmente mais leve, pra não competir com a aba principal. */
+  .tabs.sub-tabs { margin: -6px 0 10px 0; }
+  .tabs.sub-tabs .tab-btn { font-size: 10.5px; padding: 4px 10px; }
+
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .canvas-wrap { position: relative; height: 210px; }
+  .canvas-wrap.pequeno { height: 180px; }
+  .chart-card h3.subtitulo { font-size: 11px; }
+  .field.periodo-geral { max-width: 260px; }
+  .oculto { display: none; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tab-btn {
+    background: var(--bg); color: var(--text-secondary); border: 1px solid var(--divider);
+    border-radius: 6px; padding: 6px 12px; font-family: inherit; font-size: 11.5px;
+    font-weight: 500; cursor: pointer;
+  }
+  .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .tab-btn:hover:not(.active) { background: var(--primary-light); }
+
+  .rank-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .rank-card table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .rank-card td { padding: 4px 2px; border-bottom: 1px solid var(--divider); }
+  .rank-card td.num { text-align: right; font-weight: 700; color: var(--primary-dark); white-space: nowrap; }
+  .rank-card td.n { text-align: right; color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
+  .empty { color: var(--text-secondary); font-style: italic; font-size: 11.5px; }
+  .loading { text-align: center; padding: 40px; color: var(--text-secondary); }
+
+  .alert-card { border-left: 4px solid var(--warning); }
+  .alert-card.vazio { border-left-color: var(--divider); }
+  .alert-row { padding: 6px 0; border-bottom: 1px solid var(--divider); font-size: 12px; }
+  .alert-row:last-child { border-bottom: none; }
+  .alert-row .destaque { font-weight: 700; color: var(--error); }
+  .alert-row .z { color: var(--text-secondary); font-size: 10.5px; }
+</style>

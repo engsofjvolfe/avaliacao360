@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel — Avaliação 360</title>
+  <base target="_top">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <?!= include_('EstilosComuns'); ?>
+  <?!= include_('PainelEstilos'); ?>
+</head>
+<body>
+
+  <div class="app-bar">
+    <h1>Painel — Avaliação 360</h1>
+    <p>Compare pessoas, setores e cargos livremente — qualquer combinação</p>
+  </div>
+
+  <div class="top-tabs">
+    <button type="button" class="top-tab-btn active" id="topTabAvaliacoes" onclick="trocarPainelPrincipal('avaliacoes')">Avaliações</button>
+    <button type="button" class="top-tab-btn" id="topTabParticipacao" onclick="trocarPainelPrincipal('participacao')">Participação</button>
+  </div>
+
+  <div class="content" id="painelAvaliacoes">
+
+    <div class="card">
+      <h3>O que comparar</h3>
+      <div class="subtitle">Adicione quantos itens quiser — pessoa com pessoa, setor com setor, ou a mesma pessoa/setor em períodos diferentes.</div>
+      <div class="builder-row">
+        <div class="field">
+          <label for="selTipo">Tipo</label>
+          <select id="selTipo" onchange="trocarTipoItem()">
+            <option value="pessoa">Pessoa</option>
+            <option value="setor">Setor</option>
+            <option value="cargo">Cargo</option>
+            <option value="geral">Equipe inteira</option>
+          </select>
+        </div>
+        <div class="field" id="fieldSetorFiltro">
+          <label for="selSetorFiltro">Setor</label>
+          <select id="selSetorFiltro" onchange="popularValores()"><option value="">Todos</option></select>
+        </div>
+        <div class="field field-item">
+          <label for="selValor">Item</label>
+          <select id="selValor"></select>
+        </div>
+        <div class="field">
+          <label for="selPeriodoItem">Período deste item</label>
+          <select id="selPeriodoItem"><option value="">Todos (combina)</option></select>
+        </div>
+        <button type="button" class="btn-add" id="btnAdd" onclick="adicionarEntidade()">+ Adicionar</button>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="warn-max" id="warnMax">Máximo de 6 itens na comparação — remova algum para adicionar outro.</div>
+      <div class="hint">Sem nenhum item adicionado, os gráficos mostram a equipe inteira. Deixe "Período deste item" em Todos para combinar tudo, ou escolha um período específico — dá pra adicionar a mesma pessoa ou setor mais de uma vez, cada vez com um período diferente, pra comparar.</div>
+    </div>
+
+    <div class="card">
+      <h3>Base das notas</h3>
+      <div class="subtitle">Vale para todos os gráficos abaixo — Resumo, Evolução, Perfil de Competências, Distribuição, Dispersão e Todos os setores/cargos. O Ranking é a única exceção: ele é sempre baseado em Colegas/Liderança (ver por quê na dica que aparece ao trocar para "Autoavaliação").</div>
+      <div class="tabs" id="tabsLente">
+        <button type="button" class="tab-btn active" id="lenteColegas" onclick="trocarLente('colegas')">Colegas/Liderança</button>
+        <button type="button" class="tab-btn" id="lenteAutoavaliacao" onclick="trocarLente('autoavaliacao')">Autoavaliação</button>
+        <button type="button" class="tab-btn" id="lenteAmbos" onclick="trocarLente('ambos')">Os dois</button>
+      </div>
+      <div class="hint" id="hintLente"></div>
+    </div>
+
+    <div class="card">
+      <h3>Visão geral e ranking</h3>
+      <div class="subtitle">Independente dos itens acima — sempre olha todo mundo. Só o período aqui embaixo muda o recorte.</div>
+      <div class="field periodo-geral">
+        <label for="selPeriodoGeral">Período (Visão Geral / Ranking)</label>
+        <select id="selPeriodoGeral" onchange="atualizar()"><option value="">Todos os períodos</option></select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Resumo por item comparado</h3>
+      <div class="subtitle" id="subtitleResumo"></div>
+      <div class="tabela-scroll"><table class="resumo" id="tResumo"></table></div>
+      <div class="hint" id="hintResumo"></div>
+    </div>
+
+    <div class="card alert-card" id="cardQuedas">
+      <h3>Quedas entre períodos</h3>
+      <div id="listaQuedas"></div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card chart-card">
+        <h3>Evolução por Período</h3>
+        <div class="canvas-wrap"><canvas id="chEvolucao"></canvas></div>
+        <div class="hint" id="hintEvolucao"></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Perfil de Competências</h3>
+        <div class="canvas-wrap"><canvas id="chRadar"></canvas></div>
+        <div class="hint" id="hintRadar"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Distribuição e dispersão das notas</h3>
+      <div class="subtitle">Duas médias iguais podem esconder formas bem diferentes — todo mundo concordando perto do centro, ou opiniões divididas nas duas pontas.</div>
+      <div class="tabs">
+        <button type="button" class="tab-btn active" id="tabDistribuicao" onclick="trocarAbaDispersao('distribuicao')">Distribuição das notas</button>
+        <button type="button" class="tab-btn" id="tabDispersao" onclick="trocarAbaDispersao('dispersao')">Dispersão por critério</button>
+      </div>
+      <div class="tabs sub-tabs" id="tabsModoDistribuicao">
+        <button type="button" class="tab-btn active" id="modoPorNota" onclick="trocarModoDistribuicao('nota')">Por nota</button>
+        <button type="button" class="tab-btn" id="modoPorAvaliador" onclick="trocarModoDistribuicao('avaliador')">Por avaliador</button>
+      </div>
+      <div class="canvas-wrap" id="wrapDistribuicao"><canvas id="chDistribuicao"></canvas></div>
+      <div class="canvas-wrap oculto" id="wrapDispersao"><canvas id="chDispersao"></canvas></div>
+      <div class="hint" id="hintDispersao"></div>
+    </div>
+
+    <div class="card">
+      <h3>Todos os setores e todos os cargos</h3>
+      <div class="chart-grid">
+        <div class="chart-card"><h3 class="subtitulo">Todos os setores</h3><div class="canvas-wrap pequeno"><canvas id="chSetor"></canvas></div></div>
+        <div class="chart-card"><h3 class="subtitulo">Todos os cargos</h3><div class="canvas-wrap pequeno"><canvas id="chCargo"></canvas></div></div>
+      </div>
+      <div class="hint" id="hintLenteSetorCargo"></div>
+      <div class="hint" id="hintGruposOcultos"></div>
+    </div>
+
+    <div id="blocoRanking">
+      <div class="rank-grid">
+        <div class="card rank-card"><h3 id="tituloTop">Top — maior média</h3><table id="tTop5"></table></div>
+        <div class="card rank-card"><h3 id="tituloBottom">Bottom — menor média</h3><table id="tBottom5"></table></div>
+        <div class="card rank-card"><h3 id="tituloGaps">Maiores gaps de autopercepção</h3><table id="tGaps"></table></div>
+      </div>
+      <div class="hint" id="hintRanking"></div>
+    </div>
+    <div class="card hint oculto" id="avisoSemRanking">O Ranking (Top/Bottom/gaps) não é mostrado com a lente "Autoavaliação" — ver a dica na seção "Base das notas" lá em cima pro motivo.</div>
+
+    <div class="card alert-card" id="cardOutliers">
+      <h3>Notas fora do padrão</h3>
+      <div class="subtitle" id="subtitleOutliers">Notas isoladas bem diferentes do que a própria pessoa costuma dar. Não prova nada sozinho — é só um sinal barato de "vale conferir".</div>
+      <div id="listaOutliers"></div>
+    </div>
+
+  </div>
+
+  <div class="content oculto" id="painelParticipacao">
+
+    <div class="card">
+      <h3>Filtro</h3>
+      <div class="subtitle">Muda o recorte do Resumo, Por Setor/Cargo e Quem ainda não respondeu. A Evolução embaixo é sempre a trajetória inteira, todos os períodos.</div>
+      <div class="field periodo-geral">
+        <label for="selPeriodoParticipacao">Período</label>
+        <select id="selPeriodoParticipacao" onchange="atualizarParticipacao()"><option value="">Todos os períodos (combina)</option></select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Resumo</h3>
+      <div class="hint" id="resumoParticipacao"></div>
+    </div>
+
+    <div class="card alert-card" id="cardQuedaParticipacao">
+      <h3>Queda na participação</h3>
+      <div id="listaQuedaParticipacao"></div>
+    </div>
+
+    <div class="card">
+      <h3>Participação por setor e por cargo</h3>
+      <div class="chart-grid">
+        <div class="chart-card"><h3 class="subtitulo">Por setor</h3><div class="canvas-wrap pequeno"><canvas id="chParticipacaoSetor"></canvas></div></div>
+        <div class="chart-card"><h3 class="subtitulo">Por cargo</h3><div class="canvas-wrap pequeno"><canvas id="chParticipacaoCargo"></canvas></div></div>
+      </div>
+      <div class="hint" id="hintGruposOcultosParticipacao"></div>
+    </div>
+
+    <div class="card chart-card">
+      <h3>Evolução da participação por período</h3>
+      <div class="canvas-wrap"><canvas id="chEvolucaoParticipacao"></canvas></div>
+    </div>
+
+    <div class="card alert-card" id="cardNuncaResponderam">
+      <h3>Quem ainda não respondeu</h3>
+      <div class="subtitle">Sempre por nome — essa lista é pra lembrar quem falta, não é um número agregado, então não passa pela mesma trava de "grupo pequeno" das outras seções.</div>
+      <div id="listaNuncaResponderam"></div>
+    </div>
+
+  </div>
+
+  <?!= include_('PainelScript'); ?>
+</body>
+</html>

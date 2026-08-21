@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Avaliação 360</title>
+  <base target="_top">
+  <?!= include_('EstilosComuns'); ?>
+  <?!= include_('SidebarEstilos'); ?>
+</head>
+<body>
+
+  <div class="app-bar">
+    <h1>Avaliação 360º</h1>
+    <p>Ligamento EJ — painel rápido</p>
+  </div>
+
+  <div class="content">
+
+    <div class="card">
+      <h2>Atualizar dados</h2>
+      <div class="kicker">Reprocessa "Respostas do Formulário 1" → Dados Tratados.</div>
+      <button type="button" class="btn-primary" id="btnAtualizar" onclick="atualizar()">
+        <span class="spinner" id="spinnerAtualizar"></span>
+        <span id="txtAtualizar">Atualizar agora</span>
+      </button>
+      <div class="status-msg" id="msgAtualizar"></div>
+    </div>
+
+    <div class="card">
+      <h2>Filtros do Dashboard</h2>
+      <label for="selPeriodo">Período</label>
+      <select id="selPeriodo">
+        <option value="">Todos os períodos</option>
+      </select>
+
+      <label for="selIntegranteFiltro">Integrante (para o radar)</label>
+      <select id="selIntegranteFiltro">
+        <option value="">— nenhum —</option>
+      </select>
+
+      <button type="button" class="btn-primary" onclick="aplicarFiltro()">Aplicar no Dashboard</button>
+      <div class="status-msg" id="msgFiltro"></div>
+    </div>
+
+    <div class="card">
+      <h2>Consulta rápida</h2>
+      <label for="selIntegranteConsulta">Integrante</label>
+      <select id="selIntegranteConsulta">
+        <option value="">Selecione…</option>
+      </select>
+      <button type="button" class="btn-secondary" onclick="consultar()">Ver resumo</button>
+
+      <div id="statCard" class="stat-card oculto">
+        <div class="stat-row">
+          <span class="stat-label">Status</span>
+          <span id="stStatus"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Setor</span>
+          <span class="stat-value" id="stSetor"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Média geral</span>
+          <span class="stat-value" id="stMedia"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Nº avaliações recebidas</span>
+          <span class="stat-value" id="stNAval"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Autoavaliação</span>
+          <span class="stat-value" id="stAuto"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Heteroavaliação</span>
+          <span class="stat-value" id="stHetero"></span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Gap (hetero − auto)</span>
+          <span class="stat-value" id="stGap"></span>
+        </div>
+      </div>
+      <div class="status-msg" id="msgConsulta"></div>
+    </div>
+
+  </div>
+
+  <div class="footer">Veja a aba "Leia-me" para o guia completo.</div>
+
+  <?!= include_('SidebarScript'); ?>
+</body>
+</html>

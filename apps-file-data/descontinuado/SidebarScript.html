@@ -1,0 +1,124 @@
+<script>
+  let ESTADO = { periodos: [], membros: [] };
+
+  function carregarPainel() {
+    google.script.run.withSuccessHandler(popularSelects).withFailureHandler(erroGeral).getDadosPainel();
+  }
+
+  function popularSelects(dados) {
+    ESTADO = dados;
+    const selPeriodo = document.getElementById('selPeriodo');
+    dados.periodos.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p; opt.textContent = p;
+      if (p === dados.filtroPeriodoAtual) opt.selected = true;
+      selPeriodo.appendChild(opt);
+    });
+
+    const selsIntegrante = [
+      document.getElementById('selIntegranteFiltro'),
+      document.getElementById('selIntegranteConsulta'),
+    ];
+    selsIntegrante.forEach(sel => {
+      dados.membros.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.nome; opt.textContent = m.nome + ' — ' + m.setor;
+        sel.appendChild(opt.cloneNode(true));
+      });
+    });
+    if (dados.filtroIntegranteAtual) {
+      document.getElementById('selIntegranteFiltro').value = dados.filtroIntegranteAtual;
+    }
+  }
+
+  function erroGeral(erro) {
+    console.error(erro);
+  }
+
+  function atualizar() {
+    const btn = document.getElementById('btnAtualizar');
+    const spinner = document.getElementById('spinnerAtualizar');
+    const txt = document.getElementById('txtAtualizar');
+    const msg = document.getElementById('msgAtualizar');
+    btn.disabled = true; spinner.classList.add('on'); txt.textContent = 'Atualizando…';
+    msg.className = 'status-msg';
+
+    google.script.run
+      .withSuccessHandler(r => {
+        btn.disabled = false; spinner.classList.remove('on'); txt.textContent = 'Atualizar agora';
+        if (!r.ok) {
+          msg.className = 'status-msg status-error on';
+          msg.innerHTML = '' + r.erro;
+          return;
+        }
+        const temAvisos = r.avisos && r.avisos.length > 0;
+        msg.className = 'status-msg on ' + (temAvisos ? 'status-warn' : 'status-ok');
+        let html = '' + r.nRespostas + ' respostas processadas · ' + r.nLinhasTidy + ' linhas geradas.';
+        if (temAvisos) {
+          html += '<ul>' + r.avisos.slice(0, 6).map(a => '<li>' + a + '</li>').join('') + '</ul>';
+        }
+        msg.innerHTML = html;
+      })
+      .withFailureHandler(e => {
+        btn.disabled = false; spinner.classList.remove('on'); txt.textContent = 'Atualizar agora';
+        msg.className = 'status-msg status-error on';
+        msg.innerHTML = '' + e.message;
+      })
+      .executarAtualizacaoSidebar();
+  }
+
+  function aplicarFiltro() {
+    const periodo = document.getElementById('selPeriodo').value;
+    const integrante = document.getElementById('selIntegranteFiltro').value;
+    const msg = document.getElementById('msgFiltro');
+    google.script.run
+      .withSuccessHandler(() => {
+        msg.className = 'status-msg status-ok on';
+        msg.innerHTML = 'Filtro aplicado no Dashboard.';
+      })
+      .withFailureHandler(e => {
+        msg.className = 'status-msg status-error on';
+        msg.innerHTML = '' + e.message;
+      })
+      .aplicarFiltroDashboard(periodo, integrante);
+  }
+
+  function consultar() {
+    const nome = document.getElementById('selIntegranteConsulta').value;
+    const msg = document.getElementById('msgConsulta');
+    const card = document.getElementById('statCard');
+    if (!nome) {
+      msg.className = 'status-msg status-warn on';
+      msg.innerHTML = 'Selecione um integrante.';
+      card.classList.add('oculto');
+      return;
+    }
+    google.script.run
+      .withSuccessHandler(r => {
+        if (!r) {
+          msg.className = 'status-msg status-warn on';
+          msg.innerHTML = 'Sem dados para essa pessoa ainda.';
+          card.classList.add('oculto');
+          return;
+        }
+        msg.className = 'status-msg';
+        card.classList.remove('oculto');
+        document.getElementById('stStatus').innerHTML =
+          '<span class="chip ' + (r.status === 'Ativo' ? 'chip-ativo' : 'chip-inativo') + '">' + (r.status || '—') + '</span>';
+        document.getElementById('stSetor').textContent = r.setor || '—';
+        document.getElementById('stMedia').textContent = (r.mediaGeral !== '' ? r.mediaGeral : '—');
+        document.getElementById('stNAval').textContent = r.nAvaliacoes || 0;
+        document.getElementById('stAuto').textContent = (r.autoavaliacao !== '' ? r.autoavaliacao : '—');
+        document.getElementById('stHetero').textContent = (r.heteroavaliacao !== '' ? r.heteroavaliacao : '—');
+        document.getElementById('stGap').textContent = (r.gap !== '' ? r.gap : '—');
+      })
+      .withFailureHandler(e => {
+        msg.className = 'status-msg status-error on';
+        msg.innerHTML = '' + e.message;
+        card.classList.add('oculto');
+      })
+      .getResumoRapido(nome);
+  }
+
+  carregarPainel();
+</script>

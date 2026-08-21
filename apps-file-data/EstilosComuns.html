@@ -1,0 +1,21 @@
+<!--
+  EstilosComuns.html
+  ---------------------------------------------------------------------------
+  Fonte da fonte (Roboto), cores e formato básico de "cartão" — tudo que o
+  Painel e a Barra Lateral têm igual. Incluído nos dois via include() (ver
+  Utils.gs) para não duplicar a mesma paleta em dois arquivos.
+  ---------------------------------------------------------------------------
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary: #5746E3; --primary-dark: #3B2FB0; --primary-light: #EDEBFB;
+    --accent-teal: #00BFA5; --warning: #FFA000; --error: #E53935; --success: #43A047;
+    --surface: #FFFFFF; --bg: #F7F7FB; --text-primary: #212121;
+    --text-secondary: #757575; --divider: #E0E0E0;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: 'Roboto', Arial, sans-serif; margin: 0; background: var(--bg); color: var(--text-primary); font-size: 13px; }
+  .card { background: var(--surface); border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+</style>

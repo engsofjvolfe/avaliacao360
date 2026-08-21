@@ -1,0 +1,830 @@
+<script>
+  let MAX_ENTIDADES = 6; // valor padrão até getFiltrosPainel() responder com o limite real do servidor (fonte única: PARAM_PADRAO.maxEntidades em Config.gs)
+  const PALETTE = ['#5746E3', '#00BFA5', '#FFA000', '#E53935', '#8E24AA', '#3B2FB0'];
+  const COR_GERAL = '#9E9E9E';
+
+  let FILTROS = { pessoas: [], setores: [], cargos: [], periodos: [] };
+  let ENTIDADES = []; // { tipo, valor, label }
+  let charts = {};
+  let ULTIMO_DADOS = null;       // guarda a última resposta de getPainelDados() pra poder trocar de aba sem chamar o servidor de novo
+  let abaDispersaoAtiva = 'distribuicao';
+  let modoDistribuicao = 'nota'; // 'nota' (cada nota conta 1x) ou 'avaliador' (cada avaliador distinto conta 1x, com sua média)
+
+  // ---- Lente: qual base de notas usar em TODO o resto da tela (menos o Ranking, que é
+  // sempre colegas/liderança — ver Painel.gs). Trocar de lente muda os dados em si, então
+  // precisa chamar o servidor de novo (diferente de modoDistribuicao/abaDispersaoAtiva,
+  // que só trocam como o mesmo dado já recebido é desenhado). ----
+  let lente = 'colegas'; // 'colegas' | 'autoavaliacao' | 'ambos'
+
+  function withAlpha(hex, alpha) {
+    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  // Escala de notas em uso (ex.: 0–10), sempre a partir do servidor — nunca fixa aqui.
+  function escalaDe(d) {
+    return {
+      min: d.parametros.notaMinima, max: d.parametros.notaMaxima,
+      step: Math.max(1, Math.round((d.parametros.notaMaxima - d.parametros.notaMinima) / 5)),
+    };
+  }
+
+  // ---- A "seção principal" é sempre a base da lente ativa (colegas quando a lente é
+  // 'colegas' ou 'ambos'; autoavaliação quando a lente é só 'autoavaliacao'). A "seção
+  // secundária" só existe quando a lente é 'ambos' — é o que faz cada gráfico desenhar
+  // 1 série por item na maioria das vezes, e 2 (a principal + a secundária) só em 'ambos'.
+  function secaoPrincipal(d) { return lente === 'autoavaliacao' ? d.secoes.autoavaliacao : d.secoes.colegas; }
+  function secaoSecundaria(d) { return lente === 'ambos' ? d.secoes.autoavaliacao : null; }
+
+  // Rótulo de uma série: só ganha sufixo "(colegas)"/"(autoaval.)" quando as duas
+  // aparecem juntas (lente 'ambos') — nos outros casos seria redundante repetir em
+  // todo item que só existe 1 lente na tela inteira.
+  function rotuloComLente(rotulo, ehSecundaria) {
+    if (lente !== 'ambos') return rotulo;
+    return rotulo + (ehSecundaria ? ' (autoaval.)' : ' (colegas)');
+  }
+
+  function labelPessoa(p) {
+    return p.nome + (p.status !== 'Ativo' ? ' (Inativo)' : '') + ' — ' + p.setor;
+  }
+
+  // ---- Filtro de Setor no seletor de Item: só faz sentido quando Tipo = Pessoa (Setor e
+  // Cargo já SÃO o próprio setor/cargo — filtrar um pelo outro não faria sentido). Trocar
+  // de Tipo esconde/mostra o campo e limpa o filtro (não deixa um setor escolhido "preso"
+  // filtrando Cargo por engano depois de trocar de Tipo e voltar pra Pessoa). ----
+  function trocarTipoItem() {
+    const tipo = document.getElementById('selTipo').value;
+    document.getElementById('fieldSetorFiltro').classList.toggle('oculto', tipo !== 'pessoa');
+    document.getElementById('selSetorFiltro').value = '';
+    // 'geral' (Equipe inteira) não tem opção pra escolher — desabilita o campo Item
+    // pra deixar isso visualmente óbvio, em vez de mostrar um dropdown funcional com 1
+    // opção só (que pareceria quebrado/incompleto).
+    document.getElementById('selValor').disabled = (tipo === 'geral');
+    popularValores();
+  }
+
+  function popularValores() {
+    const tipo = document.getElementById('selTipo').value;
+    const setorFiltro = document.getElementById('selSetorFiltro').value;
+    const sel = document.getElementById('selValor');
+    sel.innerHTML = '';
+    let opcoes = [];
+    if (tipo === 'pessoa') {
+      const pessoas = setorFiltro ? FILTROS.pessoas.filter(p => p.setor === setorFiltro) : FILTROS.pessoas;
+      opcoes = pessoas.map(p => ({ valor: p.nome, texto: labelPessoa(p) }));
+    }
+    if (tipo === 'setor') opcoes = FILTROS.setores.map(s => ({ valor: s, texto: s }));
+    if (tipo === 'cargo') opcoes = FILTROS.cargos.map(c => ({ valor: c, texto: c }));
+    // 'geral' não tem "qual" escolher (é sempre todo mundo) — só existe pra "+ Adicionar"
+    // funcionar igual aos outros tipos (precisa de um `valor` não-vazio), com um rótulo
+    // que já deixa claro que não há escolha aqui.
+    if (tipo === 'geral') opcoes = [{ valor: 'geral', texto: 'Toda a equipe (sem escolha)' }];
+    opcoes.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o.valor; opt.textContent = o.texto;
+      sel.appendChild(opt);
+    });
+  }
+
+  function rotuloEntidade(tipo, valor, periodo) {
+    const base = tipo === 'setor' ? 'Setor: ' + valor : tipo === 'cargo' ? 'Cargo: ' + valor
+      : tipo === 'geral' ? 'Equipe inteira' : valor;
+    return periodo ? base + ' · ' + periodo : base;
+  }
+
+  function adicionarEntidade() {
+    const tipo = document.getElementById('selTipo').value;
+    const valor = document.getElementById('selValor').value;
+    const periodo = document.getElementById('selPeriodoItem').value;
+    if (!valor) return;
+    // mesma pessoa/setor/cargo pode se repetir DESDE QUE o período seja diferente —
+    // é exatamente isso que permite comparar "Bruna Rossi · 2026.1" com "Bruna Rossi · 2026.2".
+    if (ENTIDADES.some(e => e.tipo === tipo && e.valor === valor && e.periodo === periodo)) return;
+    if (ENTIDADES.length >= MAX_ENTIDADES) {
+      document.getElementById('warnMax').classList.add('on');
+      return;
+    }
+    ENTIDADES.push({ tipo, valor, periodo, label: rotuloEntidade(tipo, valor, periodo) });
+    renderChips();
+    atualizar();
+  }
+
+  function removerEntidade(i) {
+    ENTIDADES.splice(i, 1);
+    document.getElementById('warnMax').classList.remove('on');
+    renderChips();
+    atualizar();
+  }
+
+  function renderChips() {
+    const box = document.getElementById('chips');
+    box.innerHTML = '';
+    if (!ENTIDADES.length) {
+      box.innerHTML = '<span class="chip-empty">Nenhum item — mostrando a equipe inteira.</span>';
+      return;
+    }
+    ENTIDADES.forEach((e, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.innerHTML = '<span class="dot" style="background:' + PALETTE[i % PALETTE.length] + '"></span>' +
+        '<span></span><button type="button" title="Remover">×</button>';
+      chip.querySelector('span:nth-child(2)').textContent = e.label;
+      chip.querySelector('button').onclick = () => removerEntidade(i);
+      box.appendChild(chip);
+    });
+    if (ENTIDADES.length < MAX_ENTIDADES) document.getElementById('warnMax').classList.remove('on');
+  }
+
+  function carregarFiltros() {
+    google.script.run.withSuccessHandler(dados => {
+      FILTROS = dados;
+      MAX_ENTIDADES = dados.maxEntidades || MAX_ENTIDADES;
+      document.getElementById('warnMax').textContent =
+        'Máximo de ' + MAX_ENTIDADES + ' itens na comparação — remova algum para adicionar outro.';
+      [document.getElementById('selPeriodoItem'), document.getElementById('selPeriodoGeral'), document.getElementById('selPeriodoParticipacao')].forEach(sel => {
+        dados.periodos.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p; opt.textContent = p;
+          sel.appendChild(opt);
+        });
+      });
+      const selSetorFiltro = document.getElementById('selSetorFiltro');
+      dados.setores.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s; opt.textContent = s;
+        selSetorFiltro.appendChild(opt);
+      });
+      popularValores();
+      renderChips();
+      atualizarHintLente();
+      atualizar();
+    }).withFailureHandler(erro).getFiltrosPainel();
+  }
+
+  // ---- Alternância entre as duas "telas" do Painel (Avaliações / Participação) — o
+  // Google só permite 1 diálogo aberto por vez, então em vez de 2 diálogos separados,
+  // as duas telas moram na mesma janela e só uma fica visível. Participação só busca
+  // dado do servidor na primeira vez que alguém clica nela (ou quando o filtro de
+  // período dela muda) — não em toda troca de aba, pra não gastar chamada à toa. ----
+  let participacaoCarregada = false;
+  function trocarPainelPrincipal(nome) {
+    document.getElementById('topTabAvaliacoes').classList.toggle('active', nome === 'avaliacoes');
+    document.getElementById('topTabParticipacao').classList.toggle('active', nome === 'participacao');
+    document.getElementById('painelAvaliacoes').classList.toggle('oculto', nome !== 'avaliacoes');
+    document.getElementById('painelParticipacao').classList.toggle('oculto', nome !== 'participacao');
+    if (nome === 'participacao' && !participacaoCarregada) {
+      participacaoCarregada = true;
+      atualizarParticipacao();
+    }
+  }
+
+  function erro(e) {
+    const painelAtivo = document.querySelector('.content:not(.oculto)') || document.querySelector('.content');
+    painelAtivo.innerHTML = '<div class="loading">Erro ao carregar: ' + (e.message || e) + '</div>';
+  }
+
+  // ---- google.script.run só permite 10 chamadas simultâneas por diálogo — acima disso,
+  // as chamadas extras ficam NA FILA, esperando uma vaga liberar (documentação oficial do
+  // Apps Script). Sem essa trava, cada clique rápido (adicionar 2-3 itens seguidos, trocar
+  // a lente enquanto o cálculo anterior ainda não voltou) dispara uma chamada nova de
+  // getPainelDados() por cima da anterior — e como cada chamada já leva alguns segundos,
+  // isso empilha fila real, multiplicando a demora sentida (confirmado no log de Execuções:
+  // chamadas disparadas em sequência rápida apareceram levando 19s, 60s, até 119s). Por
+  // isso `atualizar()` nunca dispara uma 2ª chamada enquanto a 1ª ainda não voltou — só
+  // guarda que precisa atualizar de novo assim que ela voltar, e manda só a última versão
+  // do que foi pedido (não uma chamada por clique). ----
+  let atualizarEmAndamento = false;
+  let atualizarPendente = false;
+
+  function atualizar() {
+    if (atualizarEmAndamento) { atualizarPendente = true; return; }
+    dispararAtualizar_();
+  }
+
+  function dispararAtualizar_() {
+    atualizarEmAndamento = true;
+    document.body.classList.add('carregando');
+    const periodoGeral = document.getElementById('selPeriodoGeral').value;
+    google.script.run
+      .withSuccessHandler(d => { atualizarEmAndamento = false; document.body.classList.remove('carregando'); render(d); processarAtualizarPendente_(); })
+      .withFailureHandler(e => { atualizarEmAndamento = false; document.body.classList.remove('carregando'); erro(e); processarAtualizarPendente_(); })
+      .getPainelDados(ENTIDADES, periodoGeral, lente);
+  }
+
+  function processarAtualizarPendente_() {
+    if (!atualizarPendente) return;
+    atualizarPendente = false;
+    dispararAtualizar_();
+  }
+
+  // ---- Troca de lente: muda a base de dados em si (colegas/liderança x autoavaliação),
+  // então precisa recalcular no servidor — diferente de modoDistribuicao/abaDispersaoAtiva,
+  // que só reorganizam um dado que já chegou. ----
+  function trocarLente(nova) {
+    lente = nova;
+    document.getElementById('lenteColegas').classList.toggle('active', nova === 'colegas');
+    document.getElementById('lenteAutoavaliacao').classList.toggle('active', nova === 'autoavaliacao');
+    document.getElementById('lenteAmbos').classList.toggle('active', nova === 'ambos');
+    atualizarHintLente();
+    atualizar();
+  }
+
+  function atualizarHintLente() {
+    document.getElementById('hintLente').textContent = lente === 'colegas'
+      ? 'Mostrando só o que colegas e liderança disseram sobre cada item — a visão "de fora".'
+      : lente === 'autoavaliacao'
+        ? 'Mostrando só a autoavaliação — o que a própria pessoa/grupo disse de si mesma. O Ranking fica escondido nessa lente: na autoavaliação, cada pessoa só tem 1 avaliadora possível (ela mesma), então o limiar de confiança do Ranking (mínimo de avaliadores distintos) nunca seria atingido, e a lista sempre viria vazia.'
+        : 'Mostrando as duas visões juntas em cada gráfico: colegas/liderança (traço/barra cheios) e autoavaliação do mesmo item (tracejado/mais claro), lado a lado.';
+  }
+
+  function fmt(n) { return (n === null || n === undefined) ? '—' : n; }
+  function destruir(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+  function preencherTabela(elId, itens, colunas) {
+    const table = document.getElementById(elId);
+    table.innerHTML = '';
+    if (!itens.length) { table.innerHTML = '<tr><td class="empty">Sem dados para essa comparação.</td></tr>'; return; }
+    itens.forEach(item => {
+      const tr = document.createElement('tr');
+      colunas.forEach((col, i) => {
+        const td = document.createElement('td');
+        td.textContent = col.fmt ? col.fmt(item) : item[col.key];
+        if (col.titulo) td.title = col.titulo(item);
+        if (col.classe) td.className = col.classe;
+        else if (i > 0) td.className = 'num';
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+  }
+
+  function render(d) {
+    ULTIMO_DADOS = d;
+    const escala = escalaDe(d);
+
+    renderResumo(d);
+    renderEvolucao(d, escala);
+    renderRadar(d, escala);
+
+    // ---- Distribuição e dispersão: só a aba ativa é desenhada (a outra fica com o
+    // canvas escondido — construir um gráfico Chart.js num canvas invisível faz ele medir
+    // tamanho 0 e nascer com o desenho errado, então cada troca de aba reconstrói o
+    // gráfico daquele momento em diante, nunca dos dois ao mesmo tempo). ----
+    atualizarHintDispersao();
+    renderGraficoDispersaoAtivo();
+
+    renderVisaoGeral(d, escala);
+    renderRanking(d);
+    renderQuedas(d);
+    renderOutliers(d);
+  }
+
+  // ---- Resumo por item ----
+  // "Nº avaliações" = quantas notas ao todo (pessoas x critérios x períodos somados);
+  // "Nº avaliadores" = quantas pessoas DISTINTAS deram alguma nota. São propositalmente
+  // dois números diferentes — o segundo é o que diz se a média reflete a opinião de
+  // várias pessoas ou de uma só (ver Estatisticas.gs::contarAvaliadoresUnicos_).
+  // "Nota" segue a lente ativa; em 'ambos', a lente secundária (sempre autoavaliação)
+  // aparece numa linha pequena embaixo do número, na MESMA célula, em vez de abrir mais
+  // uma coluna (mantém a tabela escaneável mesmo comparando vários itens lado a lado).
+  function renderResumo(d) {
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+
+    document.getElementById('subtitleResumo').textContent = lente === 'colegas'
+      ? 'Mostrando "Nota" só de colegas e liderança — a autoavaliação da própria pessoa/grupo não entra aqui.'
+      : lente === 'autoavaliacao'
+        ? 'Mostrando só a autoavaliação — o que a própria pessoa/grupo disse de si mesma, sem colegas nem liderança.'
+        : '"Nota" é colegas/liderança; a autoavaliação aparece numa linha pequena logo abaixo, dentro da mesma célula.';
+    document.getElementById('hintResumo').textContent =
+      (lente === 'autoavaliacao'
+        ? 'Como só existe 1 avaliadora possível na autoavaliação (a própria pessoa), "Nota ajustada" não se aplica aqui (aparece como "—").'
+        : 'Nota ajustada = a nota, descontado o quanto cada avaliador costuma dar nota acima ou abaixo da média geral (esse cálculo também não usa autoavaliação).') +
+      ' Itens de Setor/Cargo com poucos integrantes ativos aparecem como "grupo pequeno" em vez de um número — poucas pessoas tornam fácil adivinhar quem deu qual nota pra quem.';
+
+    function celulaNota(i, titulo) {
+      const principal = fmt(secP.resumo[i].nota);
+      if (!secS) return '<td class="num" title="' + (titulo || '') + '">' + principal + '</td>';
+      const auto = secS.resumo[i].nota;
+      const linhaAuto = (auto !== null && auto !== undefined) ? '<span class="mini">autoaval.: ' + auto + '</span>' : '';
+      return '<td class="num" title="' + (titulo || '') + '">' + principal + linhaAuto + '</td>';
+    }
+
+    const tResumo = document.getElementById('tResumo');
+    let html = '<tr><th>Item</th><th class="num">Integrantes</th><th class="num">Nota</th><th class="num">Nota ajustada</th><th class="num">Nota estabilizada</th><th class="num">Nº avaliações</th><th class="num">Nº avaliadores</th><th class="num">Alertas (≤' + d.parametros.limiteAlerta + ')</th></tr>';
+    secP.resumo.forEach((r, i) => {
+      const dot = '<span class="dot" style="background:' + PALETTE[i % PALETTE.length] + '"></span>';
+      if (r.grupoPequeno) {
+        html += '<tr><td>' + dot + r.label + '</td>' +
+          '<td class="num">' + fmt(r.integrantes) + '</td>' +
+          '<td class="pequeno" colspan="3">grupo pequeno demais pra mostrar (menos de ' + d.parametros.minIntegrantesGrupo + ' integrantes)</td>' +
+          '<td class="num">' + fmt(r.nAvaliacoes) + '</td><td class="num">' + fmt(r.nAvaliadores) + '</td><td class="num">' + fmt(r.alertas) + '</td></tr>';
+        return;
+      }
+      const tituloIC = r.intervaloConfianca
+        ? 'Intervalo de confiança (~95%): ' + r.intervaloConfianca.inferior + ' a ' + r.intervaloConfianca.superior
+        : '';
+      html += '<tr><td>' + dot + r.label + '</td>' +
+        '<td class="num">' + fmt(r.integrantes) + '</td>' +
+        celulaNota(i, tituloIC) +
+        '<td class="secundario">' + fmt(r.notaAjustada) + '</td>' +
+        '<td class="secundario" title="Nota puxada em direção à média geral do time, proporcional a quão pouco dado esse item tem">' + fmt(r.notaEstabilizada) + '</td>' +
+        '<td class="num">' + fmt(r.nAvaliacoes) + '</td><td class="num">' + fmt(r.nAvaliadores) + '</td><td class="num">' + fmt(r.alertas) + '</td></tr>';
+    });
+    tResumo.innerHTML = html;
+  }
+
+  // ---- Evolução por período: 1 linha por item (2 em 'ambos': cheia = principal,
+  // tracejada = secundária) + linha cinza tracejada "Equipe (geral)" de referência,
+  // sempre na base da lente principal. ----
+  function renderEvolucao(d, escala) {
+    destruir('chEvolucao');
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+
+    const datasets = [];
+    d.labels.forEach((label, i) => {
+      datasets.push({
+        label: rotuloComLente(label, false), data: secP.evolucao.map(x => x['s' + i]),
+        borderColor: PALETTE[i % PALETTE.length], backgroundColor: PALETTE[i % PALETTE.length],
+        tension: 0.15, spanGaps: true, _itemIndex: i, _lenteSerie: 'principal',
+      });
+      if (secS) {
+        datasets.push({
+          label: rotuloComLente(label, true), data: secS.evolucao.map(x => x['s' + i]),
+          borderColor: PALETTE[i % PALETTE.length], backgroundColor: PALETTE[i % PALETTE.length],
+          borderDash: [5, 4], tension: 0.15, spanGaps: true, _itemIndex: i, _lenteSerie: 'secundaria',
+        });
+      }
+    });
+    datasets.push({
+      label: 'Equipe (geral)', data: secP.evolucao.map(x => x.geral),
+      borderColor: COR_GERAL, backgroundColor: COR_GERAL, borderDash: [5, 4], tension: 0.15, spanGaps: true,
+    });
+    charts.chEvolucao = new Chart(document.getElementById('chEvolucao'), {
+      type: 'line',
+      data: { labels: secP.evolucao.map(x => x.periodo), datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { labels: { font: { size: 10 }, boxWidth: 10 } },
+          tooltip: { callbacks: { label: ctx => {
+            const ds = ctx.dataset;
+            if (ds.label === 'Equipe (geral)') {
+              const n = secP.evolucao[ctx.dataIndex].nGeral;
+              return ds.label + ': ' + ctx.formattedValue + (n !== undefined ? ' (n=' + n + ' avaliador(es))' : '');
+            }
+            const sec = ds._lenteSerie === 'secundaria' ? secS : secP;
+            const n = sec.evolucao[ctx.dataIndex]['n' + ds._itemIndex];
+            return ds.label + ': ' + ctx.formattedValue + (n !== undefined ? ' (n=' + n + ' avaliador(es))' : '');
+          } } },
+        },
+        scales: { y: { min: escala.min, max: escala.max } },
+      },
+    });
+    document.getElementById('hintEvolucao').textContent = lente === 'ambos'
+      ? 'Linha cheia = colegas/liderança; linha tracejada colorida = autoavaliação do mesmo item; linha cinza tracejada = média da equipe (sempre colegas/liderança).'
+      : lente === 'autoavaliacao' ? 'Mostrando só a trajetória da autoavaliação de cada item ao longo do tempo.'
+        : 'Mostrando só a trajetória das notas de colegas/liderança.';
+  }
+
+  // ---- Radar de competências: 1 forma por item (2 em 'ambos'). ----
+  // spanGaps: true é essencial aqui — nem todo item tem nota em todo critério
+  // (ex.: Comprometimento/Tomada de Decisão hoje só existem para quem avalia a
+  // Presidência), e sem isso o Chart.js interrompe o contorno bem no vértice sem
+  // dado, deixando o "círculo" de competências visualmente aberto mesmo quando os
+  // demais critérios têm nota. Com spanGaps, o traço pula o vértice nulo e conecta
+  // os pontos vizinhos, fechando a forma. O próprio Painel.gs já tira do desenho,
+  // em cada base, qualquer critério que NENHUM item comparado tem NAQUELA base —
+  // por isso os eixos usados aqui são sempre os da seção PRINCIPAL, e a seção
+  // secundária busca valor por NOME de critério (não por índice), caso as duas
+  // bases não tenham exatamente os mesmos critérios sobrando. ----
+  function valorRadarPorCriterio(secao, criterio, chave) {
+    const ponto = secao.radar.find(x => x.criterio === criterio);
+    return ponto ? ponto[chave] : null;
+  }
+  function renderRadar(d, escala) {
+    destruir('chRadar');
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+    const criterios = secP.radar.map(x => x.criterio);
+
+    const datasets = [];
+    d.labels.forEach((label, i) => {
+      datasets.push({
+        label: rotuloComLente(label, false), data: secP.radar.map(x => x['s' + i]),
+        borderColor: PALETTE[i % PALETTE.length], backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.15),
+        spanGaps: true, _itemIndex: i, _lenteSerie: 'principal',
+      });
+      if (secS) {
+        datasets.push({
+          label: rotuloComLente(label, true),
+          data: criterios.map(crit => valorRadarPorCriterio(secS, crit, 's' + i)),
+          borderColor: PALETTE[i % PALETTE.length], backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.05),
+          borderDash: [5, 4], spanGaps: true, _itemIndex: i, _lenteSerie: 'secundaria',
+        });
+      }
+    });
+    charts.chRadar = new Chart(document.getElementById('chRadar'), {
+      type: 'radar',
+      data: { labels: criterios, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: { r: { min: escala.min, max: escala.max, ticks: { stepSize: escala.step, font: { size: 9 } }, pointLabels: { font: { size: 9 } } } },
+        plugins: {
+          legend: { display: d.labels.length > 1 || !!secS, labels: { font: { size: 9 }, boxWidth: 8 } },
+          // um pico isolado na teia (tipo uma nota 10 sozinha) costuma vir de pouquíssimo
+          // dado — o "n=" no tooltip é o jeito de reparar isso sem precisar de outra tela.
+          tooltip: { callbacks: { label: ctx => {
+            const ds = ctx.dataset;
+            const sec = ds._lenteSerie === 'secundaria' ? secS : secP;
+            const n = ds._lenteSerie === 'secundaria'
+              ? valorRadarPorCriterio(secS, criterios[ctx.dataIndex], 'n' + ds._itemIndex)
+              : secP.radar[ctx.dataIndex]['n' + ds._itemIndex];
+            return ds.label + ': ' + ctx.formattedValue + (n !== undefined && n !== null ? ' (n=' + n + ' avaliador(es))' : '');
+          } } },
+        },
+      },
+    });
+    document.getElementById('hintRadar').textContent = lente === 'ambos'
+      ? 'Contorno cheio = colegas/liderança; contorno tracejado e mais claro = autoavaliação do mesmo item.'
+      : lente === 'autoavaliacao' ? 'Mostrando só o perfil de competências segundo a autoavaliação de cada item.'
+        : '';
+  }
+
+  // ---- Visão geral: todos os setores / cargos com integrantes suficientes.
+  // Em vez de só uma barra sólida (que faz um grupo de 4 pessoas parecer tão "sólido"
+  // quanto um de 12 só por terem a mesma altura), cada categoria vira duas camadas:
+  // uma barra clara e larga = intervalo de confiança (~95%, "essa média pode realmente
+  // estar em qualquer lugar dessa faixa"), e um ponto sólido = nota estabilizada (a
+  // média já puxada em direção à média geral, proporcional a quão pouco dado o grupo
+  // tem). Em 'ambos', a mesma dupla de camadas se repete pra autoavaliação, com um
+  // ponto vazado (triângulo) em vez de círculo cheio, pra diferenciar sem precisar de
+  // uma paleta de cor nova (aqui cada gráfico já usa 1 cor fixa pra TODAS as barras,
+  // ao contrário dos gráficos acima que usam 1 cor por item). ----
+  function renderVisaoGeral(d, escala) {
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+
+    function graficoVisaoGeral(canvasId, itensP, itensS, cor) {
+      const datasets = [
+        {
+          type: 'bar', label: rotuloComLente('Intervalo de confiança (~95%)', false), order: 2,
+          data: itensP.map(x => x.intervaloConfianca ? [x.intervaloConfianca.inferior, x.intervaloConfianca.superior] : null),
+          backgroundColor: withAlpha(cor, 0.18), borderColor: withAlpha(cor, 0.35), borderWidth: 1, borderSkipped: false,
+        },
+        {
+          type: 'line', label: rotuloComLente('Nota estabilizada', false), order: 1, showLine: false,
+          data: itensP.map(x => x.notaEstabilizada), pointRadius: 5, pointHoverRadius: 6,
+          pointBackgroundColor: cor, pointBorderColor: '#fff', pointBorderWidth: 1.5, pointStyle: 'circle',
+        },
+      ];
+      if (itensS) {
+        datasets.push(
+          {
+            type: 'bar', label: rotuloComLente('Intervalo de confiança (~95%)', true), order: 4,
+            data: itensS.map(x => x.intervaloConfianca ? [x.intervaloConfianca.inferior, x.intervaloConfianca.superior] : null),
+            backgroundColor: withAlpha(cor, 0.08), borderColor: withAlpha(cor, 0.2), borderWidth: 1, borderSkipped: false,
+          },
+          {
+            type: 'line', label: rotuloComLente('Nota estabilizada', true), order: 3, showLine: false,
+            data: itensS.map(x => x.notaEstabilizada), pointRadius: 5, pointHoverRadius: 6,
+            pointBackgroundColor: '#fff', pointBorderColor: cor, pointBorderWidth: 1.5, pointStyle: 'triangle',
+          }
+        );
+      }
+      return new Chart(document.getElementById(canvasId), {
+        data: { labels: itensP.map(x => x.chave), datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: !!itensS, labels: { font: { size: 8 }, boxWidth: 8 } },
+            tooltip: { callbacks: { label: ctx => {
+              const ehSecundaria = ctx.datasetIndex >= 2;
+              const x = (ehSecundaria ? itensS : itensP)[ctx.dataIndex];
+              if (ctx.dataset.type === 'bar') return 'Intervalo (~95%): ' + x.intervaloConfianca.inferior + ' a ' + x.intervaloConfianca.superior;
+              return ['Nota estabilizada: ' + x.notaEstabilizada, 'Nota crua: ' + x.nota, 'Avaliadores distintos: ' + x.n];
+            } } },
+          },
+          scales: { y: { min: escala.min, max: escala.max }, x: { ticks: { font: { size: 8 } } } },
+        },
+      });
+    }
+    destruir('chSetor');
+    charts.chSetor = graficoVisaoGeral('chSetor', secP.visaoSetor, secS ? secS.visaoSetor : null, '#5746E3');
+    destruir('chCargo');
+    charts.chCargo = graficoVisaoGeral('chCargo', secP.visaoCargo, secS ? secS.visaoCargo : null, '#00BFA5');
+
+    document.getElementById('hintLenteSetorCargo').textContent = lente === 'ambos'
+      ? 'Círculo cheio = colegas/liderança; triângulo vazado = autoavaliação do mesmo setor/cargo.'
+      : lente === 'autoavaliacao' ? 'Mostrando a autoavaliação média de cada setor/cargo — quanto cada grupo se autoavalia, em média.'
+        : '';
+
+    const ocultos = (secP.gruposOcultos.setores || []).concat(secP.gruposOcultos.cargos || []);
+    document.getElementById('hintGruposOcultos').textContent = ocultos.length
+      ? 'Não aparecem aqui por terem poucos integrantes (menos de ' + d.parametros.minIntegrantesGrupo + '): ' + ocultos.join(', ') + '.'
+      : '';
+  }
+
+  // ---- Ranking: nota/gap + os dois números de amostra, os dois visíveis de cara (sem
+  // precisar passar o mouse): "n=" é Nº DE AVALIADORES distintos — a base do limiar de
+  // confiança — e "(X notas)" ao lado é o Nº DE AVALIAÇÕES bruto (a mesma pessoa avaliando
+  // vários critérios conta várias vezes aqui). Só mostra o segundo número quando ele é
+  // diferente do primeiro — se cada avaliador desse 1 nota só, seria redundante repetir.
+  // Tamanho da lista (hoje 5) vem de Param_TamanhoRanking — nunca fixo aqui.
+  //
+  // O Ranking sempre usa colegas/liderança (nunca segue a lente 'autoavaliacao') — ver o
+  // porquê no comentário de Painel.gs. `d.ranking` vem `null` nesse caso, e o card some. ----
+  function renderRanking(d) {
+    const bloco = document.getElementById('blocoRanking');
+    const aviso = document.getElementById('avisoSemRanking');
+    if (!d.ranking) {
+      bloco.classList.add('oculto');
+      aviso.classList.remove('oculto');
+      return;
+    }
+    bloco.classList.remove('oculto');
+    aviso.classList.add('oculto');
+
+    document.getElementById('tituloTop').textContent = 'Top ' + d.parametros.tamanhoRanking + ' — maior média';
+    document.getElementById('tituloBottom').textContent = 'Bottom ' + d.parametros.tamanhoRanking + ' — menor média';
+    document.getElementById('tituloGaps').textContent = 'Maiores ' + d.parametros.tamanhoRanking + ' gaps de autopercepção';
+    document.getElementById('hintRanking').textContent =
+      'Nota conta só colegas e liderança (nunca a autoavaliação da própria pessoa). Só entram no Top/Bottom quem foi avaliado por pelo menos ' + d.parametros.minAvaliacoesRanking + ' pessoas diferentes no período — ' +
+      'e no ranking de gaps, quem tem pelo menos ' + d.parametros.minAvaliacoesGap + ' notas de autoavaliação E ' + d.parametros.minAvaliacoesGap +
+      ' colegas/liderança diferentes avaliando. "n=" é o nº de avaliadores distintos; "(X notas)" é o total de notas dadas por eles juntos.';
+    function fmtN(nAvaliadores, nAvaliacoes) {
+      return 'n=' + nAvaliadores + (nAvaliacoes !== nAvaliadores ? ' (' + nAvaliacoes + ' notas)' : '');
+    }
+    const colN = {
+      fmt: x => fmtN(x.nAvaliadores, x.nAvaliacoes), classe: 'n',
+      titulo: x => x.nAvaliacoes + ' nota(s) ao todo, de ' + x.nAvaliadores + ' colega(s)/liderança distinto(s)',
+    };
+    const colNota = { fmt: x => x.nota, titulo: x => 'Nota estabilizada (puxada pra média geral, proporcional à amostra): ' + x.notaEstabilizada };
+    preencherTabela('tTop5', d.ranking.top5, [{ key: 'nome' }, colNota, colN]);
+    preencherTabela('tBottom5', d.ranking.bottom5, [{ key: 'nome' }, colNota, colN]);
+    preencherTabela('tGaps', d.ranking.maioresGaps, [{ key: 'nome' }, { fmt: x => (x.gap > 0 ? '+' : '') + x.gap },
+      {
+        fmt: x => fmtN(x.nAvaliadores, x.nAvaliacoes), classe: 'n',
+        titulo: x => x.nAvaliadores + ' colega(s)/liderança avaliando (' + x.nAvaliacoes + ' notas) + autoavaliação dela mesma',
+      }]);
+  }
+
+  // ---- Quedas entre períodos — base = mesma "seção principal" do resto da tela. ----
+  function renderQuedas(d) {
+    const cardQuedas = document.getElementById('cardQuedas');
+    const listaQuedas = document.getElementById('listaQuedas');
+    if (!d.quedas.length) {
+      cardQuedas.classList.add('vazio');
+      listaQuedas.innerHTML = '<div class="empty">Nenhuma queda de ' + d.parametros.quedaAlertaPontos + '+ pontos entre os 2 últimos períodos com dado.</div>';
+    } else {
+      cardQuedas.classList.remove('vazio');
+      listaQuedas.innerHTML = d.quedas.map(q =>
+        '<div class="alert-row"><span class="destaque">' + q.label + '</span>: caiu ' + Math.abs(q.delta) +
+        ' pontos entre ' + q.periodoAnterior + ' (' + q.valorAnterior + ') e ' + q.periodoAtual + ' (' + q.valorAtual + ')</div>'
+      ).join('');
+    }
+  }
+
+  // ---- Notas fora do padrão — base = mesma "seção principal" do resto da tela. ----
+  function renderOutliers(d) {
+    document.getElementById('subtitleOutliers').textContent = lente === 'autoavaliacao'
+      ? 'Autoavaliações isoladas bem diferentes do que a própria pessoa costuma se dar. Não prova nada sozinho — é só um sinal barato de "vale conferir".'
+      : 'Notas isoladas bem diferentes do que o próprio avaliador costuma dar. Não prova nada sozinho — é só um sinal barato de "vale conferir".';
+    const cardOutliers = document.getElementById('cardOutliers');
+    const listaOutliers = document.getElementById('listaOutliers');
+    if (!d.outliers.length) {
+      cardOutliers.classList.add('vazio');
+      listaOutliers.innerHTML = '<div class="empty">Nenhuma nota fora do padrão encontrada neste recorte.</div>';
+    } else {
+      cardOutliers.classList.remove('vazio');
+      listaOutliers.innerHTML = d.outliers.slice(0, d.parametros.maxOutliers).map(o =>
+        '<div class="alert-row"><span class="destaque">' + o.avaliador + '</span> deu nota ' + o.nota + ' pra ' + o.avaliado +
+        ' em ' + o.criterio + ' (' + o.periodo + ') — ' + o.avaliador + ' costuma dar em média ' + o.mediaAvaliador +
+        ' <span class="z">(' + Math.abs(o.z) + ' desvios-padrão de distância)</span></div>'
+      ).join('');
+    }
+  }
+
+  // ---- Aba ativa de "Distribuição e dispersão" — troca só o desenho, sem chamar o
+  // servidor de novo (os dois conjuntos de dados já vieram juntos em getPainelDados()). ----
+  function trocarAbaDispersao(aba) {
+    abaDispersaoAtiva = aba;
+    document.getElementById('tabDistribuicao').classList.toggle('active', aba === 'distribuicao');
+    document.getElementById('tabDispersao').classList.toggle('active', aba === 'dispersao');
+    // O alterna-visão "Por nota / Por avaliador" só faz sentido dentro de Distribuição.
+    document.getElementById('tabsModoDistribuicao').classList.toggle('oculto', aba !== 'distribuicao');
+    document.getElementById('wrapDistribuicao').classList.toggle('oculto', aba !== 'distribuicao');
+    document.getElementById('wrapDispersao').classList.toggle('oculto', aba !== 'dispersao');
+    atualizarHintDispersao();
+    renderGraficoDispersaoAtivo();
+  }
+
+  // ---- Alterna-visão dentro da Distribuição: "Por nota" (cada nota conta 1x — mostra a
+  // variação nota a nota) ou "Por avaliador" (cada avaliador distinto conta 1x, com a
+  // média que ele deu — mostra se as PESSOAS concordam entre si, sem que quem preencheu
+  // mais critérios pese mais). Nenhuma visão substitui a outra, as duas ficam disponíveis.
+  // Independente da lente (colegas/autoavaliação/ambos), que continua controlando QUAL
+  // base de notas entra no histograma. ----
+  function trocarModoDistribuicao(modo) {
+    modoDistribuicao = modo;
+    document.getElementById('modoPorNota').classList.toggle('active', modo === 'nota');
+    document.getElementById('modoPorAvaliador').classList.toggle('active', modo === 'avaliador');
+    atualizarHintDispersao();
+    if (abaDispersaoAtiva === 'distribuicao') { destruir('chDistribuicao'); construirHistograma(ULTIMO_DADOS); }
+  }
+
+  function atualizarHintDispersao() {
+    if (!ULTIMO_DADOS) return;
+    const sufixoLente = lente === 'ambos'
+      ? ' Traço/barra cheios = colegas/liderança; tracejado/mais claro = autoavaliação do mesmo item.'
+      : lente === 'autoavaliacao' ? ' Mostrando só a autoavaliação.' : '';
+    document.getElementById('hintDispersao').textContent = abaDispersaoAtiva === 'distribuicao'
+      ? (modoDistribuicao === 'avaliador'
+          ? 'Cada barra conta quantos AVALIADORES distintos caíram em cada faixa, usando a média de cada um — mostra se as PESSOAS concordam entre si, sem que um avaliador que preencheu mais critérios pese mais que outro.' + sufixoLente
+          : 'Quantas notas caíram em cada faixa, por item comparado — cada critério avaliado conta como uma nota separada, então um avaliador que preencheu vários critérios aparece várias vezes aqui.' + sufixoLente)
+      : 'Para cada critério: a caixa clara é onde ficam os 50% das notas do meio (Q1 a Q3); passe o mouse pra ver também a mediana e os extremos. Só aparece critério com pelo menos 4 notas no item.' + sufixoLente;
+  }
+
+  function renderGraficoDispersaoAtivo() {
+    if (!ULTIMO_DADOS) return;
+    if (abaDispersaoAtiva === 'distribuicao') {
+      destruir('chDispersao');
+      construirHistograma(ULTIMO_DADOS);
+    } else {
+      destruir('chDistribuicao');
+      construirDispersao(ULTIMO_DADOS);
+    }
+  }
+
+  // ---- Histograma: 1 barra por faixa de nota, 1 série por item comparado (2 em 'ambos').
+  // As faixas (rótulos e largura) vêm prontas do servidor — ver Painel.gs::faixasHistograma.
+  // A fonte de dado (por nota / por avaliador) troca conforme `modoDistribuicao`; a base
+  // (colegas/autoavaliação) troca conforme `lente`. ----
+  function construirHistograma(d) {
+    destruir('chDistribuicao');
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+    const chave = modoDistribuicao === 'avaliador' ? 'porAvaliador' : 'porNota';
+    const fonteP = secP.distribuicao[chave];
+    const fonteS = secS ? secS.distribuicao[chave] : null;
+
+    const datasets = [];
+    d.labels.forEach((label, i) => {
+      datasets.push({ label: rotuloComLente(label, false), data: fonteP.map(x => x['s' + i]), backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.75) });
+      if (fonteS) datasets.push({ label: rotuloComLente(label, true), data: fonteS.map(x => x['s' + i]), backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.35) });
+    });
+    charts.chDistribuicao = new Chart(document.getElementById('chDistribuicao'), {
+      type: 'bar',
+      data: { labels: fonteP.map(x => x.faixa), datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: d.labels.length > 1 || !!fonteS, labels: { font: { size: 9 }, boxWidth: 8 } } },
+        scales: {
+          y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: modoDistribuicao === 'avaliador' ? 'Nº de avaliadores' : 'Nº de notas', font: { size: 9 } } },
+          x: { title: { display: true, text: 'Nota', font: { size: 9 } }, ticks: { font: { size: 9 } } },
+        },
+      },
+    });
+  }
+
+  // ---- Dispersão por critério: 1 "caixa" (Q1–Q3, floating bar) por item, por critério
+  // (2 caixas em 'ambos') — versão simplificada de box-plot (sem plugin externo,
+  // reaproveitando a mesma técnica de barra flutuante do gráfico de Setor/Cargo).
+  // Mediana/mín/máx só aparecem no tooltip. Os critérios do eixo vêm sempre da seção
+  // PRINCIPAL; a secundária busca valor por NOME de critério, mesmo motivo do Radar. ----
+  function valorDispersaoPorCriterio(secao, criterio, chave) {
+    const ponto = secao.dispersao.find(x => x.criterio === criterio);
+    return ponto ? ponto[chave] : null;
+  }
+  function construirDispersao(d) {
+    destruir('chDispersao');
+    const secP = secaoPrincipal(d), secS = secaoSecundaria(d);
+    const criterios = secP.dispersao.map(x => x.criterio);
+    const escala = escalaDe(d);
+
+    const datasets = [];
+    d.labels.forEach((label, i) => {
+      datasets.push({
+        label: rotuloComLente(label, false),
+        data: secP.dispersao.map(x => x['d' + i] ? [x['d' + i].q1, x['d' + i].q3] : null),
+        backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.55), borderColor: PALETTE[i % PALETTE.length], borderWidth: 1,
+        _itemIndex: i, _lenteSerie: 'principal',
+      });
+      if (secS) {
+        datasets.push({
+          label: rotuloComLente(label, true),
+          data: criterios.map(crit => { const q = valorDispersaoPorCriterio(secS, crit, 'd' + i); return q ? [q.q1, q.q3] : null; }),
+          backgroundColor: withAlpha(PALETTE[i % PALETTE.length], 0.22), borderColor: PALETTE[i % PALETTE.length], borderWidth: 1, borderDash: [4, 3],
+          _itemIndex: i, _lenteSerie: 'secundaria',
+        });
+      }
+    });
+    charts.chDispersao = new Chart(document.getElementById('chDispersao'), {
+      type: 'bar',
+      data: { labels: criterios, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { display: d.labels.length > 1 || !!secS, labels: { font: { size: 9 }, boxWidth: 8 } },
+          tooltip: { callbacks: { label: ctx => {
+            const sec = ctx.dataset._lenteSerie === 'secundaria' ? secS : secP;
+            const crit = criterios[ctx.dataIndex];
+            const q = valorDispersaoPorCriterio(sec, crit, 'd' + ctx.dataset._itemIndex);
+            if (!q) return ctx.dataset.label + ': sem notas suficientes';
+            return [ctx.dataset.label + ' — mediana: ' + q.mediana, 'Q1 a Q3: ' + q.q1 + ' a ' + q.q3, 'Mín a máx: ' + q.min + ' a ' + q.max];
+          } } },
+        },
+        scales: { y: { min: escala.min, max: escala.max }, x: { ticks: { font: { size: 8 } } } },
+      },
+    });
+  }
+
+  // ---- Participação: outra tela, dados de "Registro de Respondentes" (não "Dados
+  // Tratados") — sobre QUEM respondeu, não sobre a qualidade das notas. Não tem lente:
+  // participação não tem "autoavaliação", é sempre "respondeu ou não respondeu".
+  // Reaproveita fmt/destruir/erro já usados na tela de Avaliações. ----
+  function atualizarParticipacao() {
+    const periodo = document.getElementById('selPeriodoParticipacao').value;
+    google.script.run.withSuccessHandler(renderParticipacao).withFailureHandler(erro).getParticipacaoDados(periodo);
+  }
+
+  function renderParticipacao(d) {
+    document.getElementById('resumoParticipacao').textContent =
+      d.respondentesNoRecorte + ' de ' + d.ativosNoRecorte + ' integrantes ativos responderam nesse recorte (' + fmt(d.taxaGeral) + '%).';
+
+    // ---- Queda na participação: mesma ideia visual de "Quedas entre períodos" na
+    // tela de Avaliações, mesmo limiar-em-parâmetro, só que em pontos percentuais. ----
+    const cardQueda = document.getElementById('cardQuedaParticipacao');
+    const listaQueda = document.getElementById('listaQuedaParticipacao');
+    if (!d.queda) {
+      cardQueda.classList.add('vazio');
+      listaQueda.innerHTML = '<div class="empty">Nenhuma queda de ' + d.parametros.quedaParticipacaoPontos + '+ pontos percentuais entre os 2 últimos períodos com dado.</div>';
+    } else {
+      cardQueda.classList.remove('vazio');
+      listaQueda.innerHTML = '<div class="alert-row"><span class="destaque">Participação</span> caiu ' + Math.abs(d.queda.delta) +
+        ' pontos percentuais entre ' + d.queda.periodoAnterior + ' (' + d.queda.valorAnterior + '%) e ' +
+        d.queda.periodoAtual + ' (' + d.queda.valorAtual + '%)</div>';
+    }
+
+    // ---- Por Setor / Por Cargo ----
+    function graficoParticipacao(canvasId, itens, cor) {
+      destruir(canvasId);
+      charts[canvasId] = new Chart(document.getElementById(canvasId), {
+        type: 'bar',
+        data: { labels: itens.map(x => x.chave), datasets: [{ label: 'Taxa de participação', data: itens.map(x => x.taxa), backgroundColor: cor }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => {
+              const x = itens[ctx.dataIndex];
+              return x.respondentes + ' de ' + x.total + ' responderam (' + x.taxa + '%)';
+            } } },
+          },
+          scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } }, x: { ticks: { font: { size: 8 } } } },
+        },
+      });
+    }
+    graficoParticipacao('chParticipacaoSetor', d.porSetor, '#5746E3');
+    graficoParticipacao('chParticipacaoCargo', d.porCargo, '#00BFA5');
+
+    const ocultosP = (d.gruposOcultos.setores || []).concat(d.gruposOcultos.cargos || []);
+    document.getElementById('hintGruposOcultosParticipacao').textContent = ocultosP.length
+      ? 'Não aparecem aqui por terem poucos integrantes (menos de ' + d.parametros.minIntegrantesGrupo + '): ' + ocultosP.join(', ') + '.'
+      : '';
+
+    // ---- Evolução da participação — sempre todos os períodos, igual à Evolução por
+    // Período da tela de Avaliações, independente do filtro de período aqui em cima. ----
+    destruir('chEvolucaoParticipacao');
+    charts.chEvolucaoParticipacao = new Chart(document.getElementById('chEvolucaoParticipacao'), {
+      type: 'line',
+      data: {
+        labels: d.evolucao.map(x => x.periodo),
+        datasets: [{ label: 'Taxa de participação', data: d.evolucao.map(x => x.taxa), borderColor: '#5746E3', backgroundColor: '#5746E3', tension: 0.15 }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => {
+            const x = d.evolucao[ctx.dataIndex];
+            return x.respondentes + ' de ' + x.ativos + ' responderam (' + x.taxa + '%)';
+          } } },
+        },
+        scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } },
+      },
+    });
+
+    // ---- Quem ainda não respondeu: sempre por nome, nunca mascarado por grupo pequeno
+    // (é uma lista de ação, não um número agregado — ver Participacao.gs). ----
+    const cardNunca = document.getElementById('cardNuncaResponderam');
+    const listaNunca = document.getElementById('listaNuncaResponderam');
+    if (!d.nuncaResponderam.length) {
+      cardNunca.classList.add('vazio');
+      listaNunca.innerHTML = '<div class="empty">Todo mundo ativo respondeu nesse recorte.</div>';
+    } else {
+      cardNunca.classList.remove('vazio');
+      listaNunca.innerHTML = d.nuncaResponderam.map(m =>
+        '<div class="alert-row"><span class="destaque">' + m.nome + '</span> — ' + m.setor + ' · ' + m.papel + '</div>'
+      ).join('');
+    }
+  }
+
+  carregarFiltros();
+</script>

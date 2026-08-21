@@ -1,0 +1,17 @@
+# Planilhas reais/preenchidas — nunca versionadas (dado real ou nomes fictícios de
+# desenvolvimento). Só o modelo vazio (planilhas/Avaliacao360-Modelo.xlsx) é versionado.
+planilhas/Avaliacao360_Ligamento.xlsx
+planilhas/Avaliacao360_Ligamento.limpa.xlsx
+planilhas/Avaliacao360_Ligamento.backup-antes-fix.xlsx
+planilhas/*.backup*.xlsx
+
+# Documentação interna de manutenção — não faz parte do repositório público
+# (continua existindo localmente, só não é versionada).
+docs/NOTAS-TECNICAS.md
+docs/ARQUIVOS-ALTERADOS.md
+docs/POSSIBILIDADES-PAINEL-WEB.md
+
+# Sistema operacional / editor
+.DS_Store
+Thumbs.db
+*.swp
