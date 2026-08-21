@@ -4,6 +4,25 @@
 
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
 
+## [1.0.1] — 2026-08-21
+
+### Adicionado
+
+- **Suíte de testes local** (`tests/`, `npm test`) — 4 arquivos cobrindo
+  unitário/integração/sistema (ver `TESTES.md`), seguindo o padrão que a
+  documentação oficial do `clasp` (CLI do Apps Script) recomenda: mockar
+  os serviços do Google e rodar os arquivos `.gs`/`.html` reais dentro do
+  Node, sem precisar de planilha nenhuma.
+- **CI** (`.github/workflows/tests.yml`) — roda a suíte a cada push/PR
+  para `main`.
+
+### Corrigido
+
+- `Config.gs`: o texto da pergunta de Setor esperada no Forms
+  (`COL_SETOR`) estava fixo com o nome da organização original — agora é
+  genérico (`'Qual o seu setor?'`), consistente com o resto do projeto já
+  não ter nada específico de uma organização só.
+
 ## [1.0.0] — 2026-08-21
 
 Primeira versão versionada do projeto — pré-modularização de código (todo

@@ -19,7 +19,7 @@ const SHEET_DADOS         = 'Dados Tratados';
 // então pequenas variações de espaçamento no texto da pergunta não quebram o script.
 const COL_TIMESTAMP = 'Carimbo de data/hora';
 const COL_NOME      = 'Qual o seu nome?';
-const COL_SETOR     = 'Qual o seu setor na Ligamento?';
+const COL_SETOR     = 'Qual o seu setor?';
 const COL_PERIODO   = 'Período da Avaliação 360º';
 const COL_CARGO_HINT = 'cargo'; // qualquer cabeçalho que CONTENHA esta palavra é tratado como pergunta de cargo
 

@@ -11,6 +11,14 @@ docs/NOTAS-TECNICAS.md
 docs/ARQUIVOS-ALTERADOS.md
 docs/POSSIBILIDADES-PAINEL-WEB.md
 
+# Dependências instaladas por `npm install` — reproduzíveis a partir do
+# package-lock.json, que fica versionado.
+node_modules/
+
+# Artefatos gerados pelos testes (HTML processado) — reproduzíveis rodando
+# `npm test`, não precisam ficar versionados.
+tests/fixtures/PainelDialog.rendered.html
+
 # Sistema operacional / editor
 .DS_Store
 Thumbs.db

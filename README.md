@@ -1,7 +1,8 @@
 # Avaliação 360
 
+[![Testes](https://github.com/engsofjvolfe/avaliacao360/actions/workflows/tests.yml/badge.svg)](.github/workflows/tests.yml)
 [![Licença](https://img.shields.io/badge/licença-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
-[![Versão](https://img.shields.io/badge/versão-1.0.0-informational.svg)](CHANGELOG.md)
+[![Versão](https://img.shields.io/badge/versão-1.0.1-informational.svg)](CHANGELOG.md)
 [![Plataforma](https://img.shields.io/badge/plataforma-Google%20Apps%20Script-4285F4.svg)](docs/INSTALACAO.md)
 [![Linguagem](https://img.shields.io/badge/linguagem-JavaScript%20%28Apps%20Script%29-F7DF1E.svg)](apps-file-data/)
 
@@ -23,7 +24,8 @@ organização com essa estrutura, não só a que o gerou originalmente.
 |---|---|
 | [`docs/`](docs/) | Toda a documentação narrativa (veja a tabela abaixo) |
 | [`apps-file-data/`](apps-file-data/) | Código-fonte — os arquivos `.gs`/`.html` que vão no Apps Script |
-| [`planilhas/`](planilhas/) | Planilhas de exemplo/backup (`.xlsx`) — não são a planilha ao vivo, só referência local |
+| [`tests/`](tests/) | Suíte de testes local (Node.js) — ver [TESTES.md](TESTES.md) |
+| [`planilhas/`](planilhas/) | Planilha modelo (`.xlsx`), estrutura pronta sem dado nenhum preenchido |
 
 ## Onde começar
 
@@ -31,6 +33,7 @@ organização com essa estrutura, não só a que o gerou originalmente.
 |---|---|
 | [docs/LEIA-ME.md](docs/LEIA-ME.md) | Quem usa o sistema no dia a dia (RH, liderança, qualquer integrante) — sem código |
 | [docs/INSTALACAO.md](docs/INSTALACAO.md) | Quem configura o sistema na planilha, uma vez |
+| [TESTES.md](TESTES.md) | Quem programa/mantém — como rodar a suíte de testes local |
 | [CHANGELOG.md](CHANGELOG.md) | O que mudou em cada versão |
 
 Notas técnicas de arquitetura e o histórico de arquivos alterados por
